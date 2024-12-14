@@ -2,7 +2,7 @@ import os
 import sys
 import re
 import configparser
-from colorama import init, Fore, Style
+from colorama import init, Fore, Back, Style
 from datetime import datetime
 
 # Initialize Colorama for cross-platform color support
@@ -63,6 +63,7 @@ class LogViewer:
         self.current_level = 'DEBUG'
         self.levels = ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']
         self.current_index = 0
+        self.search_terms = []  # For highlighting search terms
 
     def load_logs(self):
         logs = []
@@ -78,21 +79,21 @@ class LogViewer:
         return logs
 
     def parse_log_line(self, line):
-        try:
-            match = self.log_format.match(line)
-            if match:
-                return match.groupdict()
-            else:
-                print(f"No match for line: {line}")
-        except Exception as e:
-            print(f"Error parsing line: {e}")
+        match = self.log_format.match(line)
+        if match:
+            return match.groupdict()
         return None
 
     def filter_logs(self, level):
-        print(f"Filtering logs to level: {level}")  # Debugging-Ausgabe
         level_index = self.levels.index(level)
         self.filtered_logs = [log for log in self.logs if self.levels.index(log['severity']) >= level_index]
         self.current_index = 0
+
+    def apply_search_highlight(self, message):
+        reset = Style.RESET_ALL
+        for term in self.search_terms:
+            message = re.sub(f"({re.escape(term)})", lambda m: f"{Back.YELLOW}{Fore.BLACK}{m.group(1)}{reset}", message, flags=re.IGNORECASE)
+        return message
 
     def highlight_line(self, log):
         severity = log['severity']
@@ -105,12 +106,13 @@ class LogViewer:
         }
         color = color_mapping.get(severity, Fore.WHITE)
         reset = Style.RESET_ALL
+        message = self.apply_search_highlight(log['message'])
 
         if self.highlight_full_line:
-            return f"{color}{log['datetime']} [{severity}] {log['source']} - {log['message']}{reset}"
+            return f"{color}{log['datetime']} [{severity}] {log['source']} - {message}{reset}"
         else:
             highlighted_severity = f"{color}[{severity}]{reset}"
-            return f"{log['datetime']} {highlighted_severity} {log['source']} - {log['message']}"
+            return f"{log['datetime']} {highlighted_severity} {log['source']} - {message}"
 
     def display_logs(self):
         print("\n" + "-" * 50)
@@ -119,23 +121,37 @@ class LogViewer:
             print(f"{prefix}{self.highlight_line(log)}")
         print("-" * 50)
 
+    def reset_view(self):
+        self.filtered_logs = self.logs.copy()
+        self.current_level = 'DEBUG'
+        self.current_index = 0
+        self.search_terms = []  # Clear search terms
+
     def navigate_logs(self, direction):
         if direction == 'up' and self.current_index > 0:
             self.current_index -= 1
         elif direction == 'down' and self.current_index < len(self.filtered_logs) - 1:
             self.current_index += 1
 
-    def search_logs(self, keyword):
-        for i, log in enumerate(self.filtered_logs):
-            if keyword.lower() in log['message'].lower():
-                self.current_index = i
-                break
+    def add_search_term(self, term):
+        if term not in self.search_terms:
+            self.search_terms.append(term)
+
+    def get_logs_by_range(self, level, count):
+        level_index = self.levels.index(level)
+        result = []
+        for i, log in enumerate(self.logs):
+            if self.levels.index(log['severity']) >= level_index:
+                start = max(0, i - count)
+                result.extend(self.logs[start:i + 1])
+        self.filtered_logs = result
 
 class LogCLI:
     def __init__(self):
         self.config_manager = ConfigManager()
         self.logfile = self.get_latest_logfile()
         self.viewer = LogViewer(self.logfile, self.config_manager)
+        self.viewer.display_logs()  # Show initial logs
 
     def get_latest_logfile(self):
         logfiles = [f for f in os.listdir('.') if f.endswith('.log')]
@@ -146,43 +162,64 @@ class LogCLI:
 
     def run(self):
         while True:
-            self.viewer.display_logs()
-            command = input("Enter command (+/-/f [keyword]/q/0-4): ").strip()
+            command = input("Enter command (+/-/f [keyword]/q/0-4/4-20/r): ").strip()
             if command == '+':
                 self.increase_filter_level()
             elif command == '-':
                 self.decrease_filter_level()
             elif command.startswith('f '):
                 keyword = command[2:]
-                self.viewer.search_logs(keyword)
+                self.viewer.add_search_term(keyword)
+                self.viewer.display_logs()
             elif command == 'q':
                 break
             elif command == 'up':
                 self.viewer.navigate_logs('up')
+                self.viewer.display_logs()
             elif command == 'down':
                 self.viewer.navigate_logs('down')
+                self.viewer.display_logs()
             elif command in [str(i) for i in range(5)]:
                 self.set_filter_by_number(int(command))
+            elif '-' in command:
+                self.handle_range_command(command)
+            elif command == 'r':
+                self.viewer.reset_view()
+                self.viewer.display_logs()
+            else:
+                self.viewer.display_logs()
 
     def increase_filter_level(self):
         current_index = self.viewer.levels.index(self.viewer.current_level)
         if current_index < len(self.viewer.levels) - 1:
             self.viewer.current_level = self.viewer.levels[current_index + 1]
-            print(f"Increased log level to: {self.viewer.current_level}")  # Debugging-Ausgabe
             self.viewer.filter_logs(self.viewer.current_level)
+            self.viewer.display_logs()
 
     def decrease_filter_level(self):
         current_index = self.viewer.levels.index(self.viewer.current_level)
         if current_index > 0:
             self.viewer.current_level = self.viewer.levels[current_index - 1]
-            print(f"Decreased log level to: {self.viewer.current_level}")  # Debugging-Ausgabe
             self.viewer.filter_logs(self.viewer.current_level)
+            self.viewer.display_logs()
 
     def set_filter_by_number(self, number):
         if 0 <= number < len(self.viewer.levels):
             self.viewer.current_level = self.viewer.levels[number]
-            print(f"Set log level to: {self.viewer.current_level}")  # Debugging-Ausgabe
             self.viewer.filter_logs(self.viewer.current_level)
+            self.viewer.display_logs()
+
+    def handle_range_command(self, command):
+        try:
+            level_str, count_str = command.split('-')
+            level = int(level_str)
+            count = int(count_str)
+            if 0 <= level < len(self.viewer.levels):
+                log_level = self.viewer.levels[level]
+                self.viewer.get_logs_by_range(log_level, count)
+                self.viewer.display_logs()
+        except ValueError:
+            print("Invalid range format. Use <level>-<count>, e.g., 4-20.")
 
 if __name__ == "__main__":
     cli = LogCLI()
