@@ -1,5 +1,7 @@
 # LogAnalyzer
-Log analyzer / compactor / viewer
+Log viewer
+
+forget this project --> use https://klogg.filimonov.dev instead
 
 # Usage
 * <code>python loganalyzer.py</code>
